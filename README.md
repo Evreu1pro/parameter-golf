@@ -178,9 +178,6 @@ We believe this combination sets a new direction for extreme compression: **smal
   publisher={GitHub},
   url={https://github.com/Evreu1pro/muon-bitlinear-shadowmoe}
 }
-```
-
----
 
 ## Acknowledgments
 
