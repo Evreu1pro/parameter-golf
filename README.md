@@ -126,14 +126,12 @@ graph TD
 ## Quick Start
 
 ```bash
-git clone https://github.com/Evreu1pro/parameter-golf.git
-cd parameter-golf
+git clone https://github.com/Evreu1pro/parameter-golf.gitcd parameter-golf
+
 pip install -r requirements.txt
 
-# Train for 10 minutes on 8×H100 (Honest SOTA v3.2)
 torchrun --standalone --nproc_per_node=8 train_gpt.py
 
-# Evaluate with Honest TTT
 python train_gpt.py --eval --use_ttt
 ```
 
