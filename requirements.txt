@@ -1,7 +1,7 @@
 # Core dependencies - Production Ready v3.1
 # GQA support in SDPA requires PyTorch 2.5+
 torch>=2.5.0
-flash-attn>=2.5.0
+flash-attn>=2.5.8
 numpy
 tqdm
 huggingface-hub
