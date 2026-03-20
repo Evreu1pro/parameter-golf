@@ -131,10 +131,10 @@ cd parameter-golf
 pip install -r requirements.txt
 
 # Train for 10 minutes on 8×H100 (Honest SOTA v3.2)
-torchrun --standalone --nproc_per_node=8 train_gpt_bitnet_v3.2_honest_sota.py
+torchrun --standalone --nproc_per_node=8 train_gpt.py
 
 # Evaluate with Honest TTT
-python train_gpt_bitnet_v3.2_honest_sota.py --eval --use_ttt
+python train_gpt.py --eval --use_ttt
 ```
 
 ### Reproducing the Record
