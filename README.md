@@ -94,34 +94,6 @@ We present a **unified training algorithm** that turns the 16 MB constraint in
 
 ---
 
-## Architecture Diagram
-
-```
-graph TD
-    subgraph "DCTGD Training"
-        A[Input Tokens] --> B[Embeddings]
-        B --> C[Iteration Embedding + Universal Block]
-        C --> D{Iterate 20×}
-        D --> E[Value‑Only MoE<br/>32 experts, Gumbel‑Softmax]
-        E --> F[Cross‑Entropy Loss + 0.01×LoadBalance]
-        F --> G[Muon‑Newton‑Schulz (6 iters, f32)]
-        G --> H[Axiomatic Init (Lipschitz)]
-    end
-
-    subgraph "Honest Inference (VeRA TTT)"
-        I[Document with BOS] --> J[VeRA Adapters (b, d)]
-        J --> K[Universal Block Forward]
-        K --> L[Adaptation Steps on Document]
-        L --> M[Discard Adapters]
-        M --> N[Next Document]
-    end
-
-    style C fill:#f9f,stroke:#333,stroke-width:2px
-    style G fill:#bbf,stroke:#333,stroke-width:2px
-```
-
----
-
 ## Quick Start
 
 ```bash
