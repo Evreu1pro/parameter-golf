@@ -96,7 +96,7 @@ We present a **unified training algorithm** that turns the 16 MB constraint in
 
 ## Architecture Diagram
 
-```mermaid
+```
 graph TD
     subgraph "DCTGD Training"
         A[Input Tokens] --> B[Embeddings]
