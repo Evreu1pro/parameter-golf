@@ -1,6 +1,6 @@
 """
-BitNet b1.58 GPT - OpenAI Parameter Golf Competition (v3.2 "Honest SOTA")
-=======================================================================
+BitNet b1.58 GPT - OpenAI Parameter Golf Competition (v3.1 "Production-Ready")
+===============================================================================
 Target: val_bpb < 1.2 | Constraint: 16MB artifact + 10min on 8xH100
 
 ARCHITECTURE:
@@ -12,7 +12,18 @@ ARCHITECTURE:
 │  TTT-LoRA: Test-time training adapters for inference boost      │
 └─────────────────────────────────────────────────────────────────┘
 
-CRITICAL FIXES (v3.2 "Honest SOTA"):
+PRODUCTION FIXES (v3.1):
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. GQA Support: Auto-detect enable_gqa for PyTorch 2.5+         │
+│    - Checks q.shape[1] != k.shape[1] in attention block         │
+│    - Critical for RunPod servers with PyTorch 2.5+              │
+│ 2. Reshape Safety: All .view() replaced with .reshape()         │
+│    - Prevents stride errors on H100 HBM3 memory                 │
+│    - Applied in cross_entropy and TTT validation loops          │
+│ 3. Requirements: torch>=2.5.0 for GQA support in SDPA           │
+└─────────────────────────────────────────────────────────────────┘
+
+CRITICAL FIXES (v3.0 base):
 ┌─────────────────────────────────────────────────────────────────┐
 │ 1. Muon NaN Fix: norm calculation MUST be in float32            │
 │ 2. Shadow MoE: Added Load Balancing Loss (prevents mode collapse)│
@@ -84,7 +95,7 @@ HW = detect_hardware()
 # Default structural initialization configuration
 # This can be overridden by loading from initialization_priors.json
 DEFAULT_STRUCTURAL_CONFIG = {
-    "__version__": "structural_init_v3.2",
+    "__version__": "structural_init_v3.1",
     "description": "Mathematical primitives for weight initialization (transparent)",
     
     # Axiom patterns: identity, symmetry, distribution
@@ -586,7 +597,9 @@ def flash_attn(q, k, v, causal=True):
             out = flash_attn_func(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=causal)
             return out.transpose(1, 2)
         except: pass
-    return F.scaled_dot_product_attention(q, k, v, is_causal=causal)
+    # Check if GQA is needed (different number of Q and KV heads)
+    enable_gqa = q.shape[1] != k.shape[1]
+    return F.scaled_dot_product_attention(q, k, v, is_causal=causal, enable_gqa=enable_gqa)
 
 class Attention(nn.Module):
     def __init__(self, dim, heads, kv_heads, rope_base, gain, 
@@ -739,8 +752,8 @@ class GPT(nn.Module):
         logits = self.softcap * torch.tanh(logits / self.softcap)
         if lora:
             b, s, V = logits.shape
-            return F.cross_entropy(logits.float().view(-1, V), tgt.view(-1), reduction="none").view(b, s)
-        return F.cross_entropy(logits.float().view(-1, logits.size(-1)), tgt.view(-1))
+            return F.cross_entropy(logits.float().reshape(-1, V), tgt.reshape(-1), reduction="none").reshape(b, s)
+        return F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), tgt.reshape(-1))
     
     def get_lb_loss(self) -> Tensor:
         """Collect load balancing loss from all ShadowMoE layers."""
