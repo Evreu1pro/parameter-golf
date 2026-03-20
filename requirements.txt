@@ -1,8 +1,8 @@
+torch>=2.4.0
+flash-attn>=2.5.0
 numpy
 tqdm
-torch
 huggingface-hub
-kernels
 setuptools
 typing-extensions==4.15.0
 datasets
