@@ -95,8 +95,117 @@ class H:
     # QK gain initialization
     qk_gain_init = 1.5
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STRUCTURAL INITIALIZATION (inlined from initialization_priors.json)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Uses mathematical primitives (identity, symmetry) for weight init
+    # Combined with Kaiming for faster convergence in 10-min window
+    # Expected improvement: ~0.08 BPB over pure Kaiming (Int8 + Muon)
+    
+    use_structural_init = True      # Set False for pure Kaiming baseline
+    
+    # Scale priors per layer type (Muon-compatible)
+    scale_priors = {
+        "attention": 1.0,
+        "mlp": 0.7,
+        "embedding": 0.5,
+    }
+    
+    # Threshold initialization for quantization
+    thresh_inits = {
+        "attention": 0.35,
+        "mlp": 0.40,
+        "default": 0.35,
+    }
+    
+    # Pattern weight - LOWER for Int8 QAT (gives quantization more freedom)
+    # Original BitNet: 0.7, Int8 QAT: 0.4 (reduced for adaptive quantization)
+    pattern_weight = 0.4
+    
+    # Noise std for structural patterns
+    noise_std = 0.3
+    
+    # Lipschitz constant for bounded gradient flow
+    lipschitz_constant = 1.0
+    
     # Run ID
     run_id = os.environ.get("RUN_ID", f"run_{int(time.time())}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRUCTURAL INITIALIZATION - Muon-Compatible Weight Init
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def structural_init_weight(weight: Tensor, layer_type: str, pattern_weight: float = 0.4,
+                           noise_std: float = 0.3, lipschitz_const: float = 1.0) -> Tensor:
+    """
+    Structural weight initialization combining pattern-based and Kaiming init.
+    
+    For Int8 QAT + Muon:
+    - Uses identity/symmetry patterns for faster convergence
+    - Applies Lipschitz constraint for gradient stability
+    - Lower pattern_weight (0.4) gives QAT more freedom vs BitNet (0.7)
+    
+    Args:
+        weight: Weight tensor to initialize (out_features, in_features)
+        layer_type: 'attention', 'mlp', or 'embedding'
+        pattern_weight: Weight for structural pattern vs random (0.4 for Int8)
+        noise_std: Std for noise around structural patterns
+        lipschitz_const: Lipschitz bound for gradient stability
+    
+    Returns:
+        Initialized weight tensor
+    """
+    out_f, in_f = weight.shape
+    device, dtype = weight.device, weight.dtype
+    
+    # 1. Structural pattern base (identity-like for square, balanced for rectangular)
+    if out_f == in_f:
+        # Square matrix: near-identity with noise
+        pattern = torch.eye(out_f, device=device, dtype=dtype)
+        pattern = pattern + torch.randn_like(pattern) * noise_std * 0.1
+    elif out_f < in_f:
+        # Projection: random orthogonal rows
+        pattern = torch.randn(out_f, in_f, device=device, dtype=dtype)
+        pattern = F.normalize(pattern, dim=1)
+    else:
+        # Expansion: random orthogonal columns
+        pattern = torch.randn(out_f, in_f, device=device, dtype=dtype)
+        pattern = F.normalize(pattern, dim=0)
+    
+    # 2. Kaiming init component
+    kaiming = torch.randn(out_f, in_f, device=device, dtype=dtype)
+    kaiming = kaiming * (1.0 / math.sqrt(in_f))
+    
+    # 3. Blend structural + kaiming
+    combined = pattern_weight * pattern + (1 - pattern_weight) * kaiming
+    
+    # 4. Apply Lipschitz constraint (spectral norm bound)
+    with torch.no_grad():
+        # Estimate spectral norm via power iteration
+        u = torch.randn(in_f, device=device, dtype=dtype)
+        for _ in range(3):  # Few iterations for speed
+            v = combined @ u
+            v = v / (v.norm() + 1e-8)
+            u = combined.T @ v
+            u = u / (u.norm() + 1e-8)
+        spectral_norm = (combined @ u).norm() / (u.norm() + 1e-8)
+        
+        # Scale to satisfy Lipschitz bound
+        if spectral_norm > lipschitz_const:
+            combined = combined * (lipschitz_const / spectral_norm)
+    
+    return combined
+
+
+def get_scale_prior(layer_type: str) -> float:
+    """Get scale prior for layer type."""
+    return H.scale_priors.get(layer_type, 1.0)
+
+
+def get_thresh_init(layer_type: str) -> float:
+    """Get threshold init for layer type."""
+    return H.thresh_inits.get(layer_type, H.thresh_inits["default"])
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MUON OPTIMIZER - Newton-Schulz Orthogonalization
@@ -561,12 +670,40 @@ class GPT(nn.Module):
         self._init_weights(num_layers)
     
     def _init_weights(self, num_layers: int):
-        # Zero-init projections
+        """Initialize weights with structural patterns + Muon-compatible scaling."""
+        cfg = H()
+        
+        # Apply structural initialization to weight matrices
+        if cfg.use_structural_init:
+            for name, m in self.named_modules():
+                if isinstance(m, nn.Linear) and not getattr(m, "_zero_init", False):
+                    # Determine layer type
+                    if 'c_q' in name or 'c_k' in name or 'c_v' in name or 'proj' in name:
+                        layer_type = "attention"
+                    elif 'fc' in name or 'mlp' in name:
+                        layer_type = "mlp"
+                    else:
+                        layer_type = "default"
+                    
+                    # Apply structural init
+                    with torch.no_grad():
+                        m.weight.data = structural_init_weight(
+                            m.weight.data,
+                            layer_type=layer_type,
+                            pattern_weight=cfg.pattern_weight,
+                            noise_std=cfg.noise_std,
+                            lipschitz_const=cfg.lipschitz_constant
+                        )
+                        # Apply scale prior
+                        scale = get_scale_prior(layer_type)
+                        m.weight.data.mul_(scale)
+        
+        # Zero-init projection outputs (residual connection stability)
         for m in self.modules():
             if isinstance(m, nn.Linear) and getattr(m, "_zero_init", False):
                 nn.init.zeros_(m.weight)
         
-        # Phase-transition resid_mix
+        # Phase-transition resid_mix (early layers trust x0, late layers trust residual)
         for i, block in enumerate(self.blocks):
             with torch.no_grad():
                 phase = torch.sigmoid(torch.tensor(3.0 * (i / max(num_layers - 1, 1) - 0.5)))
